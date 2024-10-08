@@ -1,0 +1,797 @@
+!pip install scikit-learn==1.3.0
+!pip install pandas==1.5.3
+!pip install scipy==1.10.1
+!pip install networkx==3.1
+!pip install statsmodels
+!pip install pymannkendall
+!pip install pyreadr
+!pip install statsmod
+!pip install ipdb
+
+import os
+import sys
+
+import warnings
+
+
+def set_threads_for_external_libraries(n_threads=1):
+    """
+    Tries to disable BLAS or similar implicit  parallelization engines
+    by setting the following environment attributes to `1`:
+    - OMP_NUM_THREADS
+    - OPENBLAS_NUM_THREADS
+    - MKL_NUM_THREADS
+    - VECLIB_MAXIMUM_THREADS
+    - NUMEXPR_NUM_THREADS
+    This can be useful since `numpy` and co. are using these libraries to parallelize vector and matrix operations.
+    However, by default, the grab ALL CPUs an a machine. Now, if you use parallelization, e.g., based on `joblib` as in
+    `sklearn.model_selection.GridSearchCV` or `sklearn.model_selection.cross_validate`, then you will overload your
+    machine and the OS scheduler will spend most of it's time switching contexts instead of calculating.
+    Parameters
+    ----------
+    n_threads: int, optional, default: 1
+        Number of threads to use for
+    Notes
+    -----
+    - This ONLY works if you import this file BEFORE `numpy` or similar libraries.
+    - BLAS and co. only kick in when the data (matrices etc.) are sufficiently large.
+      So you might not always see the `CPU stealing` behavior.
+    - For additional info see: "2.4.7 Avoiding over-subscription of CPU ressources" in the
+      `joblib` docs (https://buildmedia.readthedocs.org/media/pdf/joblib/latest/joblib.pdf).
+    - Also note that there is a bug report for `joblib` not disabling BLAS and co.
+      appropriately: https://github.com/joblib/joblib/issues/834
+    Returns
+    -------
+    None
+    """
+
+    if (
+            "numpy" in sys.modules.keys()
+            or "scipy" in sys.modules.keys()
+            or "sklearn" in sys.modules.keys()
+            ):
+        warnings.warn("This function should be called before `numpy` or similar modules are imported.")
+
+    os.environ['OMP_NUM_THREADS'] = str(n_threads)
+    os.environ['OPENBLAS_NUM_THREADS'] = str(n_threads)
+    os.environ['MKL_NUM_THREADS'] = str(n_threads)
+    os.environ['VECLIB_MAXIMUM_THREADS'] = str(n_threads)
+    os.environ['NUMEXPR_NUM_THREADS'] = str(n_threads)
+
+
+# reduce threads otherwise the TSNE can take forever
+# NOTE: Needs to be called before import `numpy`
+n_threads = 1
+set_threads_for_external_libraries(n_threads)
+
+
+
+%reset
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+import regex as re
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from tslearn.clustering import TimeSeriesKMeans
+from tslearn.preprocessing import TimeSeriesScalerMeanVariance
+import math
+from statsmodels.sandbox.stats.multicomp import multipletests
+import pickle
+import itertools
+
+seed = 49
+np.random.seed(seed)
+df_measurements_6mnt_outl_rmv = pd.read_csv("RawDataReadyForAnalysis-Met-DOY-CN-.csv")
+rmv_vars = ["DOY"]      
+df = df_measurements_6mnt_outl_rmv.drop(axis=1, labels=rmv_vars, errors='ignore')
+
+
+import pandas as pd
+
+# Compute mean and standard deviation across all columns
+mean_values = df.mean(axis=0)
+std_valuesu = df.std(axis=0)
+normalized_data = (df.sub(mean_values, axis=1)).div(std_valuesu, axis=1)
+normalized_data
+
+normalized_data['DOY'] = df_measurements_6mnt_outl_rmv['DOY']
+df=normalized_data
+df = normalized_data.set_index('DOY')
+df.to_csv('normalized_dataRawData-ReadyForAnalysis-Met-CN.csv', header=False, index=False)
+
+
+
+import pandas as pd
+# Read the CSV file into a DataFrame
+p_values = pd.read_csv("metabolite_p_values.csv", index_col=0)
+p_values=p_values.T
+p_values
+
+
+method = 'fdr_bh' #fdr_bh, bonferroni
+p_values['adj_p_values'], p_values['Include']= multipletests(p_values['P_Value'].to_list(), method=method, returnsorted=False)[1],multipletests(p_values['P_Value'].to_list(), method=method, returnsorted=False)[0]
+p_values['adj_log_10'] = -np.log10(p_values['adj_p_values'])
+
+
+df= df.groupby('DOY').agg('mean').reset_index()
+df.set_index('DOY',inplace=True)
+df.sort_index(inplace=True)
+
+mySeries = []
+nameofSeries = []
+my_pd = pd.DataFrame()
+
+for i,j in enumerate(df.columns):
+    ser = df.iloc[:,i]
+#     ser = ser.interpolate()
+#     ser = ser.ffill().bfill()
+#     scaler = StandardScaler()
+#     ser_scaled = scaler.fit_transform(np.array(ser).reshape(-1,1))
+    ser_indx = pd.Series(ser.ravel()).set_axis(ser.index)
+    mySeries.append(ser_indx)
+    nameofSeries.append(ser.name)
+
+
+
+df.to_csv('DataForDistance.csv', index=True)
+df
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Assuming df is your DataFrame
+# If your DataFrame doesn't have a name, just replace "df" with your DataFrame variable name
+
+# Replace column names with the actual names in your DataFrame
+variable1_col = 'C10:0 AC (Decanoylcarnitine)'
+variable2_col = 'gamma-glutamyl-aminobutyrate'
+
+# Calculate the quartiles and IQR for each variable
+Q1 = df.quantile(0.25)
+Q3 = df.quantile(0.75)
+IQR = Q3 - Q1
+
+# Define a function to identify outliers
+def remove_outliers(column):
+    lower_bound = Q1[column] - 1.5 * IQR[column]
+    upper_bound = Q3[column] + 1.5 * IQR[column]
+    return df[(df[column] >= lower_bound) & (df[column] <= upper_bound)]
+
+# Remove outliers for variable1_col
+df_cleaned1 = remove_outliers(variable1_col)
+
+# Remove outliers for variable2_col
+df_cleaned2 = remove_outliers(variable2_col)
+
+# Setting the figure size
+plt.figure(figsize=(8, 6))  # Adjust width and height as needed
+
+# Plotting the first variable with blue color
+plt.scatter(df_cleaned1.index, df_cleaned1[variable1_col], marker='o', color='blue', label=f'{variable1_col} (Cleaned)')
+
+# Plotting the second variable with red color
+plt.scatter(df_cleaned2.index, df_cleaned2[variable2_col], marker='o', color='red', label=f'{variable2_col} (Cleaned)')
+
+# Fitting polynomial regression lines
+degree = 3  # Adjust the degree as needed
+coeffs1 = np.polyfit(df_cleaned1.index, df_cleaned1[variable1_col], degree)
+coeffs2 = np.polyfit(df_cleaned2.index, df_cleaned2[variable2_col], degree)
+
+# Creating polynomial functions
+poly1 = np.poly1d(coeffs1)
+poly2 = np.poly1d(coeffs2)
+
+# Generating y values for the fitted curve
+y_fit1 = poly1(df_cleaned1.index)
+y_fit2 = poly2(df_cleaned2.index)
+
+# Plotting trend lines
+plt.plot(df_cleaned1.index, y_fit1, color='blue', linestyle='--', label=f'Trend {variable1_col}')
+plt.plot(df_cleaned2.index, y_fit2, color='red', linestyle='--', label=f'Trend {variable2_col}')
+
+# Adding labels and title
+plt.xlabel('DOY')
+plt.ylabel('Metabolites Average Value')  # Assuming both variables have the same unit
+plt.title('')
+
+# Adding legend
+plt.legend()
+
+# Display the plot
+plt.show()
+
+
+
+distance_matrix = pd.read_csv("R-euclidean-distance_matrix.csv", index_col=0)
+distance_matrix
+
+distortions = []
+for i in range(1, 16):
+    # Assuming 'distance_matrix' is your precomputed distance matrix
+    kmeans = KMeans(n_clusters=i, random_state=49)
+    kmeans.fit(distance_matrix)
+    distortions.append(kmeans.inertia_)
+
+plt.plot(range(1, 16), distortions, marker='o')
+plt.xlabel('Number of clusters')
+plt.ylabel('Distortion')
+plt.title('Elbow Method for Optimal k')
+plt.show()
+
+
+
+distance_matrix = pd.read_csv("R-euclidean-distance_matrix.csv", index_col=0)
+distance_matrix
+
+
+n_clusters = 2
+from sklearn.cluster import KMeans  # Import KMeans class from scikit-learn
+
+# Use K-Means clustering
+kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+labels = kmeans.fit_predict(distance_matrix)
+labels.shape
+
+
+with open("clustering_labels", "wb") as fp:   #Pickling
+     pickle.dump(labels, fp)
+
+
+import pandas as pd
+
+# Assuming your distance matrix is named distance_matrix and labels is an array
+# Create a DataFrame with the index values and labels
+index_labels_df = pd.DataFrame({
+    'Metabolite_Index': distance_matrix.index,
+    'Label': labels
+})
+
+# Save the DataFrame to a CSV file
+index_labels_df.to_csv('metabolite_index_labels.csv', index=False)
+# Check the lengths of the arrays
+
+
+
+cluster_count = 2
+
+# Assuming you have loaded your labels correctly
+with open("../Network Corr-MonaNeelo/clustering_labels", "rb") as fp1:   #Unpickling
+    labels = pickle.load(fp1)
+        
+# Create two plots side by side for the two clusters
+fig, axs = plt.subplots(1, cluster_count, figsize=(15, 7))
+fig.suptitle('Clusters')
+
+# Initialize row index for subplot
+row_i = 0
+
+# For each label, plot the corresponding cluster
+for label in set(labels):
+    cluster = []
+    for i in range(len(labels)):
+        if labels[i] == label:
+            cluster.append(mySeries[i])
+    
+    if len(cluster) > 0:
+        sns.set()
+        regular_list = cluster
+        flat_list = [item for sublist in regular_list for item in sublist]
+        regular_list_x = [cluster[i].index.values for i in range(len(cluster))]
+        flat_list_x = [item for sublist in regular_list_x for item in sublist]
+        data = {'y': flat_list, 'x': flat_list_x}
+        df_plot = pd.DataFrame(data)
+        
+        # Plot the cluster on the corresponding subplot
+        get_plot = sns.lineplot(x='x', y='y', data=df_plot, ax=axs[row_i])
+        get_plot.set(ylim=(-3, 3))
+        axs[row_i].set_title("Cluster " + str(row_i))
+        
+        # Move to the next subplot
+        row_i += 1
+
+
+import numpy as np
+import networkx as nx
+
+import matplotlib.pyplot as plt
+
+
+def nx_plot(
+        graph=None,
+        nodes=None,
+        nodes_pos=None,
+        nodes_args=None,
+        nodes_labels=None,
+        nodes_labels_pos=None,
+        nodes_labels_args=None,
+        edges=None,
+        edges_pos=None,
+        edges_args=None,
+        edges_labels=None,
+        edges_labels_pos=None,
+        edges_labels_args=None,
+        ax=None):
+    """More complete version of`networkx` plotting. 
+    For formatting please refer to:
+    * `nx.draw_networkx_nodes`
+    * `nx.draw_networkx_edges`
+    * `nx.draw_networkx_edge_labels`
+    * `matplotlib.pyplot.annotate`
+    TODO: 
+        * document arguments
+        * add examples
+    Notes:
+    * Alpha for individual edges: set alpha in color using `edge_color`
+    * NetworkX = 2.6.3
+        * Self-loops are plotted all of a sudden but their formatting doesn't work as expected. 
+          Luckily this does not influence non-self-loops:
+          Link: https://github.com/networkx/networkx/issues/5106
+    * NetworkX < 2.4:
+        * Weirdness to make **edges transparent**:
+            Set edge alpha to a array or a function (value does not matter),
+            and then the set edge colors to RGBA:
+            `edges_args=dict(edge_color=lambda g,src,dst,d: return (1,0,0,d['alpha']), alpha=lambda g,src,dst,d: 1)`
+        * When using matplotlib.pyplot.subplots networkx adjusted axes by calling `plt.tick_params` causing unwanted
+            behavior. This was fixed in networkx 2.4.
+    Parameters
+    ----------
+    graph : [type]
+        [description]
+    nodes : [type]
+        [description]
+    nodes_pos : [type]
+        [description]
+    nodes_args : [type], optional
+        [description] (the default is None, which [default_description])
+    nodes_labels : [type], optional
+        [description] (the default is None, which [default_description])
+    nodes_labels_pos : [type], optional
+        [description] (the default is None, which [default_description])
+    nodes_labels_args : [type], optional
+        [description] (the default is None, which [default_description])
+    edges : [type], optional
+        [description] (the default is None, which [default_description])
+    edges_pos : [type], optional
+        [description] (the default is None, which [default_description])
+    edges_args : [type], optional
+        [description] (the default is None, which [default_description])
+    edges_labels : [type], optional
+        [description] (the default is None, which [default_description])
+    edges_labels_pos : [type], optional
+        [description] (the default is None, which [default_description])
+    edges_labels_args : [type], optional
+        [description] (the default is None, which [default_description])
+    
+    Returns
+    -------
+    [type]
+        [description]
+    """
+    #set color map
+    
+#     plt.set_cmap('Set3')
+#     plt.set_cmap('Set2_r')
+    
+
+
+
+#     plt.grid(False)
+#     plt.rcParams['figure.facecolor'] = 'white'
+    plt.box(False)
+
+
+
+    
+    # get axis
+    if ax is None:
+        ax = plt.gca()
+#         ax.set_facecolor('white')
+
+    # init graph
+
+    if graph is None or isinstance(graph, str):
+        if graph == "bi" or graph == "di":
+            g = nx.DiGraph()
+        else:
+            g = nx.Graph()
+    else:
+        g = graph
+
+    # init nodes
+
+    if graph is None and nodes is None:
+        if nodes_pos is not None:
+            if isinstance(nodes_pos, dict):
+                nodes = nodes_pos.keys()
+            else: 
+                nodes = np.arange(nodes_pos.shape[0])
+        else:
+            raise Exception("Either `graph` or `nodes` must be given. Both were `None`.")
+
+    if nodes is not None:
+        if isinstance(nodes, dict):
+            nodes = [(k, v) for k, v in nodes.items()]
+        g.add_nodes_from(nodes)
+
+    # init edges
+
+    if edges is not None:
+        if isinstance(edges, dict):
+            edges = [(*k, v) for k, v in edges.items()]
+        g.add_edges_from(edges)
+
+    # init positions
+
+    def init_pos(pos):
+        if pos is None:
+            return nodes_pos
+        elif callable(pos):
+            return {n: pos(g, n, d) for n, d in g.nodes(data=True)}
+        elif isinstance(pos, dict):
+            return pos
+        else:
+            return {n: p for n, p in zip(g.nodes(), pos)}
+
+    nodes_pos = init_pos(nodes_pos)
+    nodes_labels_pos = init_pos(nodes_labels_pos)
+    edges_pos = init_pos(edges_pos)
+    edges_labels_pos = init_pos(edges_labels_pos)
+
+    # init labels
+
+    def init_nodes_labels(labels):
+        if callable(labels):
+            return {n: labels(g, n, d) for n, d in g.nodes(data=True)}
+        else:
+            return labels
+    nodes_labels = init_nodes_labels(nodes_labels)
+
+    def init_edges_labels(labels):
+        if callable(labels):
+            tmp = {(src, dst): labels(g, src, dst, d) for src, dst, d in g.edges(data=True)}
+            tmp = {k: v for k, v in tmp.items() if v is not None}  # filter "None" labels
+            return tmp
+        else:
+            return labels
+    edges_labels = init_edges_labels(edges_labels)
+
+    # init layout arguments
+
+    def init_node_args(args):
+        if args is None:
+            args = {}
+        else:
+            args = args.copy()
+            for k, v in args.items():
+                if callable(v):
+                    args[k] = [v(g, n, d) for n, d in g.nodes(data=True)]
+        if "ax" not in args:
+            args["ax"] = ax
+        return args
+
+    nodes_args = init_node_args(nodes_args)
+    nodes_labels_args = init_node_args(nodes_labels_args)
+
+    def init_edges_args(args):
+        if args is None:
+            args = {}
+        else:
+            args = args.copy()
+            for k, v in args.items():
+                if callable(v):
+                    args[k] = [v(g, src, dst, d) for src, dst, d in g.edges(data=True)]
+        if "ax" not in args:
+            args["ax"] = ax
+        return args
+
+    edges_args = init_edges_args(edges_args)
+    edges_labels_args = init_edges_args(edges_labels_args)
+
+    # draw nodes (allow for several of shapes for nodes)
+    if "node_shape" in nodes_args and type(nodes_args["node_shape"]) is list:
+
+        shapes = list(zip(range(len(g.nodes())), nodes_args["node_shape"]))
+        unique_shapes = np.unique(nodes_args["node_shape"])
+
+        for shape in unique_shapes:
+
+            shape_idx = [i for i, s in shapes if s == shape]
+
+            nodes = list(g.nodes())
+            nodelist = [nodes[i] for i in shape_idx]
+
+            shape_args = nodes_args.copy()
+            del shape_args["node_shape"]
+
+            for arg, _ in shape_args.items():
+                if type(shape_args[arg]) is list:
+                    shape_args[arg] = [shape_args[arg][i] for i in shape_idx]
+
+            nx.draw_networkx_nodes(g, nodes_pos, nodelist=nodelist, node_shape=shape, **shape_args)
+    else:
+        nx.draw_networkx_nodes(g, nodes_pos, **nodes_args)
+
+    # draw edges
+    # print(g.nodes(data=True))
+    # print(g.edges(data=True))
+    # print(edges_args)
+    nx.draw_networkx_edges(g, nodes_pos, **edges_args)
+
+    # draw node labels
+    if nodes_labels is not None:
+
+        # rename args for compatibility to `nx.draw_networkx_labels`
+        args = nodes_labels_args.copy()
+        del args["ax"]
+        for original_key, new_key in {
+                "font_size": "fontsize",
+                "font_color": "color",
+                "font_family": "family",
+                "font_weight": "weight"}.items():
+            if original_key in args:
+                args[new_key] = args[original_key]
+                del args[original_key]
+
+        # check if we have list args
+        list_args = []
+        for arg, value in list(args.items()):
+            if isinstance(value, list) and len(value) == len(g.nodes):
+                list_args.append((arg, value))
+                del args[arg]
+
+        for i, node in enumerate(g.nodes):
+            ax.annotate(nodes_labels[node], nodes_labels_pos[node], **args, **{a: v[i] for a, v in list_args})
+
+    # draw edge labels
+    if edges_labels is not None:
+        nx.draw_networkx_edge_labels(g, pos=edges_labels_pos, edge_labels=edges_labels, **edges_labels_args)
+    
+    #legend
+    for n in [10, 50, 150,200]:
+        plt.plot([], [],'o', markersize = sqrt(n), label = f"{n}", color='black',marker='o',markerfacecolor='white')
+        plt.legend(labelspacing = 1,loc='upper right',frameon = False, title='$- log_{10}(p value)$')
+        
+ 
+
+
+#      for n in [8.10, 48.64, 140.69,273.22]:
+#         plt.plot([], [], 'o', color="tab:blue", markersize = sqrt(n)*2.2, label = f"{n}")
+#         plt.legend(labelspacing = 5, loc='center left', bbox_to_anchor=(0, 0.5),frameon = False)
+    
+#     for n in [0.173, 0.406,0.754]:
+#         plt.plot([], [], color = [0,0,0,abs(n)],marker = '_', linewidth = n*3, label = f"{n}")
+#         plt.legend(labelspacing = 5, loc='center left', bbox_to_anchor=(0, 0.5), frameon = False)
+        
+#     plt.tick_params(axis='x', which='both', bottom=False,
+#                 top=False, labelbottom=False)
+  
+#     # Selecting the axis-Y making the right and left axes False
+#     plt.tick_params(axis='y', which='both', right=False,
+#                 left=False, labelleft=False)
+    
+    return 
+
+
+
+
+
+import numpy as np
+import scipy.stats
+import sklearn.manifold
+n_samples = len(X)
+n_features = X.shape[1]
+
+# with open("../Network Corr-MonaNeelo/clustering_labels", "rb") as fp:   # Unpickling
+#     label = pickle.load(fp)
+
+# with open("../Network Corr-MonaNeelo/clustering_measures", "rb") as fp:   # Unpickling
+#     clustering_measures = pickle.load(fp)
+    
+# with open("../Network Corr-MonaNeelo/clustering_measures_names", "rb") as fp:   # Unpickling
+#     clustering_measures_names = pickle.load(fp)     
+
+#correlation_matrix = np.corrcoef(X, rowvar=False) 
+
+# correlation_matrix = np.array(X.corr())
+
+
+# correlation_matrix = correlation_matrix.replace(np.nan, 0)
+# correlation_matrix = np.array(correlation_matrix)
+
+#assert correlation_matrix.shape[0] == n_features
+
+
+#correlation / association of features to outcome
+# y_correlation = np.array([
+#      scipy.stats.pearsonr(X.index, X.iloc[:, i])[0]
+#      for i in range(n_features)
+# ])
+
+
+# from scipy.stats import pearsonr
+# def pearsonr_pval(x,y):
+#     return pearsonr(x,y)[1]
+# correlation_matrix = np.array(X.corr(method=pearsonr_pval))
+
+# calculate embedding of features based on absolute values in the correlation matrix
+# tsne = sklearn.manifold.TSNE(n_components=2, perplexity = 5, random_state=0, n_iter=10000)
+# tsne = sklearn.manifold.TSNE(n_components=2, perplexity = 9, random_state=49)
+#tsne = sklearn.manifold.TSNE(n_components=2, perplexity = 2, random_state=49,n_iter=1000)
+
+
+
+# embeddings = tsne.fit_transform(np.abs(correlation_matrix))
+
+#embeddings = tsne.fit_transform(label.reshape(-1,1))
+colors_plt = ["#6495ED", "#DA70D6", "#20B2AA", "#FF8C00"]
+# colors_plt = ["#6495ED", "#DA70D6", "#20B2AA", "#FF8C00", '#BA70D6','#6615ED']
+
+
+#colors_plt = ["#6495ED", "#DA70D6", "#20B2AA", "#ef8c01", "red"]
+
+
+# colors_plt = [ (0.39215686274509803, 0.5843137254901961, 0.9294117647058824, 0.7),\
+#              (0.8549019607843137, 0.4392156862745098, 0.8392156862745098, 0.7),\
+#              (12549019607843137, 0.6980392156862745, 0.6666666666666666, 0.7),\
+#              (0.9372549019607843, 0.5490196078431373, 0.00392156862745098, 0.7)]
+
+# colors_plt = ["cornflowerblue", "violet", "lightseagreen", "darkorange"]
+
+
+
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import numpy as np
+import pickle
+
+# Assuming s1 is your data
+# s1 = np.array(mySeries)
+
+# Apply t-SNE for dimensionality reduction
+#tsne = TSNE(n_components=2, perplexity=100, random_state=42, n_iter=500)
+tsne = TSNE(n_components=2, perplexity=50, random_state=5,n_iter=1000)
+
+embeddings = tsne.fit_transform(distance_matrix)
+
+
+# Visualize the result with labels
+# plt.scatter(embeddings[:, 0], embeddings[:, 1], c=labels, cmap='viridis')
+# plt.title('t-SNE Visualization with Clustering Labels')
+# plt.xlabel('t-SNE Component 1')
+# plt.ylabel('t-SNE Component 2')
+# plt.colorbar(label='Cluster Label')
+# plt.show()
+
+
+
+# Assuming df is your DataFrame and p_values is your p_values DataFrame
+df = df.drop(axis=1, labels=rmv_vars, errors='ignore')
+
+# Transpose df
+df_transformed = df.T
+
+# Replace 'Variables' column in p_values with the 'DOY' column from df_transposed
+p_values['Variables'] = df_transformed.index.values
+
+# Now, p_values['Variables'] contains the values from the 'DOY' index in df_transposed
+
+# Merge df_transformed and p_values using the index of df_transformed and the 'Variables' column of p_values
+df_transformed = df_transformed.merge(p_values[['Variables', 'adj_log_10']], left_index=True, right_on='Variables', how='left')
+
+
+# Assuming df_transformed is your DataFrame
+
+# Set 'Variables' column as the index
+df_transformed.set_index('Variables', inplace=True)
+
+# Keep only 'adj_log_10' column
+df_transformed = df_transformed[['adj_log_10']]
+df_transformed
+
+DF=df_transformed.T
+DF
+
+
+
+
+distance_matrix2 = pd.read_csv("distance_matrix2.csv", header=None)
+distance_matrix2
+
+
+
+
+## save the graph
+nodes = [
+    (i, {
+#         "correlation_y": y_correlation[i],
+#         "label": y_labels.iloc[i],
+        "name": X.iloc[:,i].name,
+#         "name":dict_rsq[i][0],
+#     "r_sq": dict_rsq[i][1],
+#        "r_sq": dict_rsq[i][1].p
+#         "r_sq": p_values[i]
+#         "p_value": df.iloc[:,i].log_10_p_value
+        "p_value": DF[X.iloc[:,i].name].adj_log_10,
+        "label":colors_plt[labels[i]]
+
+
+    })
+    for i in range(n_features)
+    
+]
+
+
+threshold = 6  # Adjust the threshold value based on your data
+
+edges = []
+for src in range(n_features):
+    for dst in range(src + 1, n_features):  # Avoid self-loops and duplicate edges
+        if distance_matrix2.iloc[src, dst] < threshold:  # Check if the distance is less than the threshold
+            edges.append((src, dst, {"distance": distance_matrix2.iloc[src, dst]}))
+
+print("Number of edges:", len(edges))
+
+
+
+
+def node_size(g, n, d):
+#     r,p = d["correlation_y"]
+#     return abs(r)*1000
+#     return -np.log(p)
+#     r = d['r_sq']
+#     return abs(r)/10
+    return 3.5 *d['p_value']
+#     return (1000 if p==0 else -np.log(p))
+
+
+
+def node_color(g, n, d):
+    cluster_index = labels[n]  # Assuming labels is the array containing cluster indices
+    if cluster_index == 0:
+        return "#1E88E5"  # Color for cluster 0
+    elif cluster_index == 1:
+        return "#F57C00"  # Color for cluster 1
+    else:
+        return "#20B2AA"  # Default color for other cases
+
+
+def node_name(g, n, d):
+    return d["name"]
+
+def edge_color(g, src, dst, d):
+    r = d["distance"]*10
+    return [0,0,0,abs(r)]
+
+def edge_width(g, src, dst, d, scaling_factor=0.05):
+    """function to calculate edge width from edge properties"""
+    return scaling_factor * np.abs(d["distance"])
+#     return np.abs(d["correlation"])
+
+fig1, ax = plt.subplots(1,1,figsize=(10,10))
+
+
+
+# Selecting the axis-X making the bottom and top axes False.
+nx_plot(
+    nodes=nodes,
+#     nodes_labels =node_name,
+    nodes_pos=embeddings,
+    edges=edges,
+    nodes_args=dict(
+        node_size=node_size,
+        node_color=node_color
+    )
+    ,
+    edges_args=dict(
+        edge_color=edge_color
+        , width=edge_width
+    )
+)
+
+
+fig1.savefig("SeasonalityPlot.png", facecolor='white', dpi=400,  bbox_inches='tight')
