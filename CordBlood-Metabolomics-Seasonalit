@@ -1,0 +1,90 @@
+#Separate V from A 
+
+import pandas as pd
+
+# Load the dataset
+df = pd.read_csv('CombatNormed_data.csv')  # Assuming the data is tab-separated, adjust accordingly
+
+# Extract sample names and groups
+sample_names = df.columns[1:]
+
+# Create separate dataframes for 'V' and 'A' samples
+df_v = df[df.columns[df.columns.str.contains('.V_') | df.columns.str.contains('.V_')]]
+df_a = df[df.columns[df.columns.str.contains('.A_') | df.columns.str.contains('.A_')]]
+
+# Add the first column (variables) to both dataframes
+df_v = pd.concat([df.iloc[:, 0], df_v], axis=1)
+df_a = pd.concat([df.iloc[:, 0], df_a], axis=1)
+
+# Save dataframes to separate CSV files
+df_v.to_csv('CombatNormed_data-Var&V.csv', index=False)
+df_a.to_csv('CombatNormed_data-Var&A.csv', index=False)
+
+
+import pandas as pd
+
+# Read the data from the CSV file starting from the second column and third row
+Data_2 = pd.read_csv('CombatNormed_data-Var&V.csv', skiprows=1)
+Data_2 = Data_2.iloc[: , 1:]
+Data_2
+
+# Convert all values to numeric, replacing any non-numeric values with NaN
+Data_2 = Data_2.apply(pd.to_numeric, errors='coerce')
+
+# Check for missing values (non-numeric values)
+if Data_2.isnull().any().any():
+    raise ValueError("Some columns contain non-numeric values")
+
+
+# Compute mean and standard deviation across all columns
+mean_values = Data_2.mean(axis=1)
+mean_values.to_csv('mean_values.csv', header = False, index=False)
+std_valuesu = Data_2.std(axis=1)
+std_valuesu.to_csv('std_valuesu.csv', header = False, index=False)
+
+
+# Perform row-wise normalization using the computed mean and standard deviation
+normalized_data = (Data_2.sub(mean_values, axis=0)).div(std_valuesu, axis=0)
+
+# Save the normalized data to a new CSV file
+normalized_data.to_csv('CombatNormed_data-Var&V-SampleNames&Month-Standardized.csv', header=False, index=False)
+normalized_data
+
+
+
+
+grouped_columns = normalized_data.columns.str.split('.').str[0]
+# Iterate through unique column names and calculate averages
+for col_name in set(grouped_columns):
+    cols_to_average = [col for col in normalized_data.columns if col.startswith(col_name)]
+    normalized_data[f"{col_name}_Final"] = normalized_data[cols_to_average].mean(axis=1)
+averages_data=normalized_data
+
+averages_data.to_csv('averages_data.csv', header=False, index=False)
+averages_data
+
+
+
+df_1=averages_data[['January_Final', 'February_Final', 'March_Final', 'April_Final', 'May_Final', 'June_Final', 'July_Final', 'August_Final', 'September_Final', 'October_Final', 'November_Final', 'December_Final']]
+df_1
+
+
+
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+df_1=averages_data[['January_Final', 'February_Final', 'March_Final', 'April_Final', 'May_Final', 'June_Final', 'July_Final', 'August_Final', 'September_Final', 'October_Final', 'November_Final', 'December_Final']]
+month_order = ['January_Final', 'February_Final', 'March_Final', 'April_Final', 'May_Final', 'June_Final', 'July_Final', 'August_Final', 'September_Final', 'October_Final', 'November_Final', 'December_Final']
+
+plt.figure(figsize=(12, 6))
+
+for metabolite in df_1.index:
+    plt.plot(month_order, df_1.loc[metabolite], label=metabolite)
+
+plt.xlabel('Birth Month')
+plt.ylabel('Normalized Average Metabolite Level')
+plt.title('Normalized Average Metabolite Level for Each Metabolite')
+plt.xticks(rotation=45, ha='right')
+plt.savefig('metabolite_plot-AvrSTd.png', dpi=500)
+plt.show()
